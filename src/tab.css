@@ -71,7 +71,7 @@ body {
   background-color: var(--background-color);
   color: var(--text-color-default);
   font-family: var(--font-family-monospace);
-  font-size: 18px;
+  font-size: 14px;
 }
 
 h1 {
