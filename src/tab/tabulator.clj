@@ -6,7 +6,7 @@
             [tab.base64 :as base64]
             [tab.db :as db]
             [tab.html :refer [$] :as html])
-  (:import (clojure.lang Named IPersistentMap Seqable)
+  (:import (clojure.lang Named IPersistentMap Seqable PersistentHashSet)
            (java.time.format DateTimeFormatter)))
 
 (set! *warn-on-reflection* true)
@@ -45,6 +45,26 @@
   [state]
   (case state :collapsed "＋" :expanded "－"))
 
+(defprotocol Expandable
+  (expandable? [this]))
+
+(extend-protocol Expandable
+  Object
+  (expandable? [_]
+    false)
+
+  PersistentHashSet
+  (expandable? [_]
+    true)
+
+  IPersistentMap
+  (expandable? [_]
+    true)
+
+  Seqable
+  (expandable? [_]
+    true))
+
 (defprotocol Tabulable
   (-tabulate [this db level]))
 
@@ -69,6 +89,70 @@
   String
   (-tabulate [this _ _]
     ($ :pre (*ann* (pr-str this))))
+
+  PersistentHashSet
+  (-tabulate [this db level]
+    (cond
+      (empty? this)
+      (*ann* (pr-str this))
+
+      (and (meets-print-level? level) (every? expandable? this))
+      (let [[uuid _] (db/put! db this)]
+        ($ :table {:id (str uuid) :data-state "collapsed"}
+          ($ :thead
+            ($ :tr
+              ($ :th
+                (let [href (format "/table/%s" uuid)]
+                  {:data-action "toggle-level"
+                   :bx-dispatch "click"
+                   :bx-request "get"
+                   :bx-uri href
+                   :bx-target "table"
+                   :bx-swap "outerHTML"
+                   :href href})
+                "＋")
+              ($ :th {:class "count"} (count this))))))
+
+      (every? expandable? this)
+      (let [[uuid _] (db/put! db this)
+            state (state-for level)]
+        ($ :table {:id (str uuid) :data-state (name state)}
+          ($ :thead
+            ($ :tr
+              ($ :th {:data-action "toggle-level"} (toggle-icon state))
+              ($ :th {:class "count"} (count this))
+              ($ :th {:class "value-type"}
+                (let [href (format "/id/%s" uuid)]
+                  ($ :a {:href href
+                         :bx-dispatch "click"
+                         :bx-request "get"
+                         :bx-uri href
+                         :bx-target "main"
+                         :bx-swap "innerHTML"
+                         :bx-push-url href} (seq-label this))))))
+          ($ :tbody
+            (map-indexed
+              (fn [i seq]
+                ($ :tr
+                  ($ :td {:class "index"} (pr-str i))
+                  ($ :td (-tabulate seq db level))))
+              this))))
+
+      :else
+      (let [full-value (*ann*
+                         (binding [*print-level* nil
+                                   *print-length* nil
+                                   pprint/*print-right-margin* 80]
+                           (with-out-str (pprint/pprint this))))]
+        (if (and (int? *print-length*) (> (count this) *print-length*))
+          ($ :pre {:data-action "toggle-length"
+                   :data-state "collapsed"
+                   :data-value (base64/encode (html/html full-value))}
+            (*ann*
+              (binding [*print-level* nil
+                        pprint/*print-right-margin* 80]
+                (with-out-str (pprint/pprint this)))))
+          ($ :pre full-value)))))
 
   IPersistentMap
   (-tabulate [this db level]
@@ -126,7 +210,7 @@
       (empty? this)
       (*ann* (pr-str this))
 
-      (and (or (every? map? this) (every? sequential? this)) (meets-print-level? level))
+      (and (every? expandable? this) (meets-print-level? level))
       (let [[uuid _] (db/put! db this)]
         ($ :table {:id (str uuid) :data-state "collapsed"}
           ($ :thead
@@ -180,7 +264,7 @@
                     ks)))
               this))))
 
-      (every? sequential? this)
+      (every? expandable? this)
       (let [[uuid _] (db/put! db this)
             state (state-for level)]
         ($ :table {:id (str uuid) :data-state (name state)}
